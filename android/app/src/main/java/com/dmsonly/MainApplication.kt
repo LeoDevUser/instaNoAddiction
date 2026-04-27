@@ -1,4 +1,4 @@
-package com.instagramdms
+package com.dmsonly
 
 import android.app.Application
 import com.facebook.react.PackageList
@@ -7,6 +7,12 @@ import com.facebook.react.ReactHost
 import com.facebook.react.ReactNativeApplicationEntryPoint.loadReactNative
 import com.facebook.react.defaults.DefaultReactHost.getDefaultReactHost
 
+// Manually registered packages that autolinking missed due to config cache
+import com.transistorsoft.rnbackgroundfetch.RNBackgroundFetchPackage
+import io.invertase.notifee.NotifeePackage
+import com.reactnativecommunity.cookies.CookieManagerPackage
+import com.reactnativecommunity.asyncstorage.AsyncStoragePackage
+
 class MainApplication : Application(), ReactApplication {
 
   override val reactHost: ReactHost by lazy {
@@ -14,8 +20,10 @@ class MainApplication : Application(), ReactApplication {
       context = applicationContext,
       packageList =
         PackageList(this).packages.apply {
-          // Packages that cannot be autolinked yet can be added manually here, for example:
-          // add(MyReactNativePackage())
+          add(RNBackgroundFetchPackage())
+          add(NotifeePackage())
+          add(CookieManagerPackage())
+          add(AsyncStoragePackage())
         },
     )
   }

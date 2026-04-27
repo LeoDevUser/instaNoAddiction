@@ -1,4 +1,4 @@
-package com.instagramdms
+package com.dmsonly
 
 import com.facebook.react.ReactActivity
 import com.facebook.react.ReactActivityDelegate

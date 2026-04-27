@@ -37,14 +37,25 @@ export async function requestNotificationPermission() {
 }
 
 function buildStyle(thread: UnreadThread) {
+  const msgs = thread.messages.map(m => ({
+    text: m.text || 'Sent a message',
+    timestamp: m.timestamp || Date.now(),
+    person: {name: m.sender || 'Unknown'},
+  }));
+  if (thread.isGroup) {
+    return {
+      type: AndroidStyle.MESSAGING,
+      person: {
+        name: thread.title || 'Group Chat',
+        ...(thread.profilePicUrl ? {icon: thread.profilePicUrl} : {}),
+      },
+      messages: msgs,
+    };
+  }
   return {
     type: AndroidStyle.MESSAGING,
     person: {name: 'You'},
-    messages: thread.messages.map(m => ({
-      text: m.text || 'Sent a message',
-      timestamp: m.timestamp || Date.now(),
-      person: {name: m.sender || 'Unknown'},
-    })),
+    messages: msgs,
   };
 }
 

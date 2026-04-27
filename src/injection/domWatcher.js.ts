@@ -10,7 +10,11 @@ export const DOM_WATCHER_JS = `
   }
   function isBlocked(url) {
     var p = getPath(url);
-    return p === '/' || /^\\/reels\\//.test(p) || /^\\/explore\\//.test(p) || /^\\/tv\\//.test(p);
+    return p === '/'
+      || /^\\/reels\\//.test(p)
+      || /^\\/explore\\//.test(p)
+      || /^\\/tv\\//.test(p)
+      || /^\\/accounts\\/blocked_users/.test(p);
   }
   function goInbox() { location.replace(INBOX_FULL); }
 
@@ -146,6 +150,7 @@ export const DOM_WATCHER_JS = `
     'a[href="/reels/"]', 'a[href^="/reels"]',
     'a[href="/explore/"]', 'a[href^="/explore"]',
     'a[href="/"]',
+    'a[href*="blocked"]',
     '[aria-label="Reels"]', '[aria-label="Explore"]',
     '[data-media-type="2"]',
   ];
@@ -156,9 +161,46 @@ export const DOM_WATCHER_JS = `
       });
     });
   }
+
+  // ── Blocked accounts protection ────────────────────────────────────────────
+  // Instagram settings use SPA navigation — the URL never changes when the
+  // user taps "Blocked". We guard two ways:
+  // 1. Walk all text nodes and hide any list item whose sole text is "Blocked".
+  // 2. If the blocked list somehow appears (Unblock buttons visible), redirect.
+  function guardBlockedPage() {
+    // Redirect immediately if Unblock buttons are visible
+    var btns = document.querySelectorAll('button, [role="button"]');
+    for (var i = 0; i < btns.length; i++) {
+      if ((btns[i].textContent || '').trim() === 'Unblock') {
+        location.replace(INBOX_FULL);
+        return;
+      }
+    }
+    // Hide the "Blocked" settings entry using a text-node walk
+    var root = document.body || document.documentElement;
+    var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
+    var node;
+    while ((node = walker.nextNode())) {
+      if ((node.nodeValue || '').trim() !== 'Blocked') continue;
+      var el = node.parentElement;
+      for (var j = 0; j < 6 && el && el !== root; j++) {
+        var role = el.getAttribute('role');
+        if (role === 'link' || role === 'listitem' || role === 'button' ||
+            el.tagName === 'A' || el.tagName === 'LI') {
+          el.style.cssText += 'display:none!important;pointer-events:none!important;';
+          break;
+        }
+        el = el.parentElement;
+      }
+    }
+  }
+
   strip();
-  new MutationObserver(strip)
-    .observe(document.documentElement, { childList: true, subtree: true });
+  guardBlockedPage();
+  new MutationObserver(function() {
+    strip();
+    guardBlockedPage();
+  }).observe(document.documentElement, { childList: true, subtree: true });
 
   // ── Unread count from title ────────────────────────────────────────────────
   function watchTitle() {

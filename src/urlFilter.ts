@@ -1,5 +1,5 @@
 const BLOCKED: RegExp[] = [
-  /instagram\.com\/reels?\b/,   // /reels/ feed and /reel/ single-reel URL
+  /instagram\.com\/reels\b/,    // /reels/ feed — single /reel/{id}/ is allowed (sent in DM)
   /instagram\.com\/explore\b/,
   /instagram\.com\/tv\b/,
   // Home feed

@@ -1,9 +1,10 @@
 const BLOCKED: RegExp[] = [
-  /instagram\.com\/reels\//,
-  /instagram\.com\/explore\//,
-  /instagram\.com\/tv\//,
-  // Root feed — redirect to DMs instead
+  /instagram\.com\/reels?\b/,   // /reels/ feed and /reel/ single-reel URL
+  /instagram\.com\/explore\b/,
+  /instagram\.com\/tv\b/,
+  // Home feed
   /^https:\/\/www\.instagram\.com\/$/,
+  /^https:\/\/www\.instagram\.com\/?$/,
   /^https:\/\/www\.instagram\.com\/#/,
 ];
 

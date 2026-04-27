@@ -1,29 +1,23 @@
-// Injected as a <style> tag via injectedJavaScript.
-// Targets aria-labels and structural selectors rather than minified class names
-// since Instagram rotates those with each deploy.
 export const BLOCK_REELS_CSS = `
-  /* Bottom nav: Reels and Explore tabs */
-  [aria-label="Reels"],
-  [aria-label="Explore"],
+  /* Bottom nav: Reels, Explore, and Home tabs */
   a[href="/reels/"],
-  a[href*="/reels"],
-  a[href="/explore/"] {
+  a[href^="/reels"],
+  a[href="/explore/"],
+  a[href^="/explore"],
+  a[href="/"],
+  [aria-label="Reels"],
+  [aria-label="Explore"] {
     display: none !important;
+    pointer-events: none !important;
   }
 
-  /* Reels clips inline in feed */
-  [data-media-type="2"],
-  article:has(video[playsinline]) {
-    display: none !important;
-  }
-
-  /* Reels button in top bar */
+  /* Reels icon wherever it appears */
   svg[aria-label="Reels"] {
     display: none !important;
   }
 
-  /* Stories bar Reels highlight */
-  [aria-label="Reels Highlights"] {
+  /* Inline video clips that are Reels (data attribute set by Instagram) */
+  [data-media-type="2"] {
     display: none !important;
   }
 `;

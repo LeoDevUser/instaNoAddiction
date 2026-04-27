@@ -14,9 +14,17 @@ const USER_AGENT =
 
 const INJECT_CSS = `
 (function() {
-  var s = document.createElement('style');
-  s.textContent = ${JSON.stringify(BLOCK_REELS_CSS)};
-  (document.head || document.documentElement).appendChild(s);
+  function doInject() {
+    var parent = document.head || document.documentElement || document.body;
+    if (!parent) return false;
+    var s = document.createElement('style');
+    s.textContent = ${JSON.stringify(BLOCK_REELS_CSS)};
+    parent.appendChild(s);
+    return true;
+  }
+  if (!doInject()) {
+    document.addEventListener('DOMContentLoaded', doInject);
+  }
 })();
 `;
 

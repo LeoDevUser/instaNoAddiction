@@ -8,154 +8,129 @@ export const DOM_WATCHER_JS = `
   function getPath(url) {
     try { return new URL(url, location.href).pathname; } catch(e) { return ''; }
   }
-
   function isBlocked(url) {
     var p = getPath(url);
     return p === '/' || /^\\/reels\\//.test(p) || /^\\/explore\\//.test(p) || /^\\/tv\\//.test(p);
   }
-
-  function isReelViewer(url) {
-    return /^\\/reel\\//.test(getPath(url || location.href));
-  }
-
   function goInbox() { location.replace(INBOX_FULL); }
 
   if (isBlocked(location.href)) { goInbox(); return; }
 
-  // ── Reel scroll lock ──────────────────────────────────────────────────────
-  // Strategy: find Instagram's scroll-snap feed container, remove every reel
-  // except the current one, and lock the scroll position.
-  // With no adjacent reels in the DOM there is nothing to swipe to.
-  var reelLockStyle = null;
-  var reelLockObserver = null;
-  var scrollLocks = []; // { el, savedTop }
-
-  function findScrollSnapContainers() {
-    var found = [];
-    document.querySelectorAll('*').forEach(function(el) {
-      if (el.__dmLocked) return;
-      var cs = window.getComputedStyle(el);
-      var snap = cs.scrollSnapType;
-      var oy = cs.overflowY;
-      if (
-        (snap && snap !== 'none' && snap !== '') ||
-        oy === 'scroll' ||
-        (oy === 'auto' && el.scrollHeight > el.clientHeight + 10)
-      ) {
-        found.push(el);
-      }
+  // ── Reel feed detection ────────────────────────────────────────────────────
+  // Reel feed = 3+ full-height videos stacked at viewport-height intervals.
+  // This pattern is distinct from video thumbnails in DM conversations.
+  function getReelVideos() {
+    var videos = Array.from(document.querySelectorAll('video'));
+    if (videos.length < 2) return null;
+    var rects = videos.map(function(v) {
+      return { v: v, r: v.getBoundingClientRect() };
     });
-    return found;
+    // Need at least one video near the top (visible)
+    var visible = rects.filter(function(x) { return Math.abs(x.r.top) < 120; });
+    if (!visible.length) return null;
+    var h = visible[0].r.height;
+    if (h < 200) return null; // Not full-screen
+    // Confirm pattern: another video ~1 height away
+    var isReelFeed = rects.some(function(x) {
+      return x.v !== visible[0].v && Math.abs(Math.abs(x.r.top) - h) < 100;
+    });
+    return isReelFeed ? rects : null;
   }
 
-  // Walk up from a video element to find its immediate child of the feed container
-  function getReelItemFromVideo(video, feedEl) {
-    var node = video;
-    while (node && node.parentElement && node.parentElement !== feedEl) {
-      node = node.parentElement;
+  // ── Layer 1: Touch event interception ─────────────────────────────────────
+  // Our handlers are registered BEFORE Instagram's because this script runs
+  // via injectedJavaScriptBeforeContentLoaded. Capture phase runs first.
+  // stopImmediatePropagation() kills all subsequent handlers on the event.
+  var touchStartY = 0;
+  var touchStartX = 0;
+  var blockingSwipe = false;
+
+  document.addEventListener('touchstart', function(e) {
+    blockingSwipe = false;
+    if (e.touches[0]) {
+      touchStartY = e.touches[0].clientY;
+      touchStartX = e.touches[0].clientX;
     }
-    return (node && node.parentElement === feedEl) ? node : null;
-  }
+  }, { capture: true, passive: true });
 
-  // Remove every reel from the feed container except the visible one
-  function stripSiblingReels(feedEl) {
-    var videos = feedEl.querySelectorAll('video');
-    if (!videos.length) return;
-
-    // Find which reel item is currently visible (closest to top of viewport)
-    var best = null;
-    var bestDist = Infinity;
-    Array.from(feedEl.children).forEach(function(child) {
-      var rect = child.getBoundingClientRect();
-      var dist = Math.abs(rect.top);
-      if (dist < bestDist) { bestDist = dist; best = child; }
-    });
-
-    if (!best) return;
-    Array.from(feedEl.children).forEach(function(child) {
-      if (child !== best) { child.remove(); }
-    });
-  }
-
-  // Lock the scrollTop of a container so it cannot scroll
-  function lockScrollEl(el) {
-    if (el.__dmLocked) return;
-    el.__dmLocked = true;
-    var saved = el.scrollTop;
-    el.addEventListener('scroll', function() {
-      el.scrollTop = saved; // immediately snap back
-    }, { passive: false });
-    scrollLocks.push({ el: el, saved: saved });
-  }
-
-  function applyReelLock() {
-    if (reelLockStyle) return;
-
-    // CSS: disable touch-action so our JS has authority to preventDefault
-    reelLockStyle = document.createElement('style');
-    reelLockStyle.id = '__dm_reel_lock';
-    reelLockStyle.textContent =
-      'html,body{overflow:hidden!important;}' +
-      '*{touch-action:none!important;}' +
-      'video,button,[role="button"],input{touch-action:manipulation!important;}';
-    (document.head || document.documentElement).appendChild(reelLockStyle);
-
-    function processContainers() {
-      findScrollSnapContainers().forEach(function(el) {
-        stripSiblingReels(el);
-        lockScrollEl(el);
-      });
+  document.addEventListener('touchmove', function(e) {
+    if (!e.touches[0]) return;
+    if (!getReelVideos()) return; // Not in a reel feed, don't interfere
+    var dy = Math.abs(e.touches[0].clientY - touchStartY);
+    var dx = Math.abs(e.touches[0].clientX - touchStartX);
+    if (dy > 12 && dy > dx) {
+      // Vertical swipe in reel feed — kill it before Instagram sees it
+      blockingSwipe = true;
+      e.stopImmediatePropagation();
+      e.preventDefault();
     }
+  }, { capture: true, passive: false });
 
-    processContainers();
+  document.addEventListener('touchend', function(e) {
+    if (blockingSwipe) {
+      // Block the touchend too — Instagram triggers the snap animation here
+      e.stopImmediatePropagation();
+      e.preventDefault();
+      blockingSwipe = false;
+    }
+  }, { capture: true, passive: false });
 
-    // Watch for containers Instagram adds lazily after initial render
-    reelLockObserver = new MutationObserver(processContainers);
-    reelLockObserver.observe(document.documentElement, { childList: true, subtree: true });
+  document.addEventListener('touchcancel', function() {
+    blockingSwipe = false;
+  }, { capture: true, passive: true });
+
+  // ── Layer 2: DOM trimming ──────────────────────────────────────────────────
+  // Belt-and-suspenders: remove sibling reels so even if a swipe slips
+  // through, there is nothing adjacent to snap to.
+  function trimReelFeed() {
+    var reelRects = getReelVideos();
+    if (!reelRects) return;
+
+    // Find the visible (current) reel video
+    var current = null;
+    var minDist = Infinity;
+    reelRects.forEach(function(x) {
+      var dist = Math.abs(x.r.top);
+      if (dist < minDist) { minDist = dist; current = x.v; }
+    });
+    if (!current) return;
+
+    // Walk up to the reel item (direct child of feed container)
+    var item = current;
+    while (item.parentElement) {
+      var sibs = Array.from(item.parentElement.children);
+      if (sibs.length > 1 && sibs.some(function(s) {
+        return s !== item && s.querySelector('video');
+      })) { break; }
+      item = item.parentElement;
+    }
+    if (!item.parentElement) return;
+
+    var feed = item.parentElement;
+    Array.from(feed.children).forEach(function(c) {
+      if (c !== item) c.remove();
+    });
   }
 
-  function removeReelLock() {
-    if (reelLockStyle) { reelLockStyle.remove(); reelLockStyle = null; }
-    if (reelLockObserver) { reelLockObserver.disconnect(); reelLockObserver = null; }
-    scrollLocks.forEach(function(lock) { lock.el.__dmLocked = false; });
-    scrollLocks = [];
-  }
+  new MutationObserver(trimReelFeed)
+    .observe(document.documentElement, { childList: true, subtree: true });
+  trimReelFeed();
 
-  if (isReelViewer()) { applyReelLock(); }
-
-  // ── Navigation interception ───────────────────────────────────────────────
+  // ── Navigation interception ────────────────────────────────────────────────
   ['pushState', 'replaceState'].forEach(function(method) {
     var orig = history[method];
     history[method] = function(state, title, url) {
-      if (url) {
-        var onReel = isReelViewer(location.href);
-        var toReel = isReelViewer(url);
-
-        // Swipe to next reel while already on one → swallow entirely
-        if (onReel && toReel) { return; }
-
-        // Blocked route → inbox
-        if (isBlocked(url)) {
-          return orig.call(this, null, '', INBOX);
-        }
-
-        var result = orig.apply(this, arguments);
-
-        if (!onReel && isReelViewer(location.href)) { applyReelLock(); }
-        if (onReel && !isReelViewer(location.href)) { removeReelLock(); }
-
-        return result;
+      if (url && isBlocked(url)) {
+        return orig.call(this, null, '', INBOX);
       }
       return orig.apply(this, arguments);
     };
   });
 
   window.addEventListener('popstate', function() {
-    if (isBlocked(location.href)) { goInbox(); return; }
-    if (isReelViewer()) { applyReelLock(); } else { removeReelLock(); }
+    if (isBlocked(location.href)) { goInbox(); }
   });
 
-  // Click guard for nav links
   document.addEventListener('click', function(e) {
     var el = e.target;
     while (el && el.tagName !== 'A') { el = el.parentElement; }
@@ -166,7 +141,7 @@ export const DOM_WATCHER_JS = `
     }
   }, true);
 
-  // ── DOM element stripping (nav tabs, explore, etc.) ───────────────────────
+  // ── DOM nav-tab stripping ──────────────────────────────────────────────────
   var HIDE = [
     'a[href="/reels/"]', 'a[href^="/reels"]',
     'a[href="/explore/"]', 'a[href^="/explore"]',
@@ -174,7 +149,6 @@ export const DOM_WATCHER_JS = `
     '[aria-label="Reels"]', '[aria-label="Explore"]',
     '[data-media-type="2"]',
   ];
-
   function strip() {
     HIDE.forEach(function(sel) {
       document.querySelectorAll(sel).forEach(function(el) {
@@ -182,11 +156,11 @@ export const DOM_WATCHER_JS = `
       });
     });
   }
-
   strip();
-  new MutationObserver(strip).observe(document.documentElement, { childList: true, subtree: true });
+  new MutationObserver(strip)
+    .observe(document.documentElement, { childList: true, subtree: true });
 
-  // ── Unread count from title ───────────────────────────────────────────────
+  // ── Unread count from title ────────────────────────────────────────────────
   function watchTitle() {
     var t = document.querySelector('title');
     if (!t) return;
@@ -196,13 +170,10 @@ export const DOM_WATCHER_JS = `
       last = document.title;
       var m = last.match(/^\\((\\d+)\\)/);
       if (m && window.ReactNativeWebView) {
-        window.ReactNativeWebView.postMessage(
-          JSON.stringify({ type: 'unread', count: parseInt(m[1], 10) })
-        );
+        window.ReactNativeWebView.postMessage(JSON.stringify({ type: 'unread', count: parseInt(m[1], 10) }));
       }
     }).observe(t, { childList: true });
   }
-
   if (document.readyState === 'loading') {
     document.addEventListener('DOMContentLoaded', watchTitle);
   } else {

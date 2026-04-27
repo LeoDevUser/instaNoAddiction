@@ -36,35 +36,25 @@ export async function requestNotificationPermission() {
   await notifee.requestPermission();
 }
 
-function buildMessagingStyle(thread: UnreadThread) {
-  const messages = thread.messages.map(m => ({
-    text: m.text || 'Sent a message',
-    timestamp: m.timestamp || Date.now(),
-    person: {name: m.sender || 'Unknown'},
-  }));
-  const groupTitle = thread.isGroup
-    ? String(thread.title || 'Group Chat')
-    : null;
-  if (groupTitle !== null) {
-    return {
-      type: AndroidStyle.MESSAGING,
-      person: {name: 'You'},
-      title: groupTitle,
-      group: true,
-      messages,
-    };
-  }
+function buildStyle(thread: UnreadThread) {
   return {
     type: AndroidStyle.MESSAGING,
     person: {name: 'You'},
-    messages,
+    messages: thread.messages.map(m => ({
+      text: m.text || 'Sent a message',
+      timestamp: m.timestamp || Date.now(),
+      person: {name: m.sender || 'Unknown'},
+    })),
   };
 }
 
 export async function showThreadNotifications(threads: UnreadThread[]) {
   if (threads.length === 0) return;
 
-  for (const thread of threads) {
+  // Post oldest first — Android puts the last-posted notification on top
+  const sorted = [...threads].sort((a, b) => a.timestamp - b.timestamp);
+
+  for (const thread of sorted) {
     try {
       const isMulti = thread.messages.length > 1;
       const title = thread.title || 'Instagram DM';
@@ -80,11 +70,11 @@ export async function showThreadNotifications(threads: UnreadThread[]) {
           groupAlertBehavior: AndroidGroupAlertBehavior.CHILDREN,
           importance: AndroidImportance.HIGH,
           smallIcon: 'ic_notification',
-          largeIcon: thread.profilePicUrl,
+          ...(thread.profilePicUrl ? {largeIcon: thread.profilePicUrl} : {}),
           timestamp: thread.timestamp,
           showTimestamp: true,
           pressAction: {id: 'default'},
-          style: isMulti ? buildMessagingStyle(thread) : undefined,
+          style: isMulti ? buildStyle(thread) : undefined,
         },
       });
     } catch (err) {

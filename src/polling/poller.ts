@@ -147,25 +147,20 @@ async function fetchUnreadThreads(
     for (const thread of threads) {
       if (!thread.read_state) continue;
 
-      const isGroup = thread.thread_type === 'group';
-      // Group chats have a dedicated image; 1-on-1 uses the other person's profile pic
+      // Group if thread_type says so OR more than one other participant
+      const isGroup =
+        thread.thread_type === 'group' || (thread.users?.length ?? 0) > 1;
+
+      // For groups only use the group's own image — never a participant's profile pic,
+      // because that would show one random member's face as the group icon.
       const profilePicUrl = isGroup
-        ? (thread.image?.uri ?? thread.image?.url ?? thread.users?.[0]?.profile_pic_url)
+        ? (thread.image?.uri ?? thread.image?.url ?? undefined)
         : thread.users?.[0]?.profile_pic_url;
 
-      // Inbox API returns only the latest 1-2 items per thread.
-      // read_state is the unread count — if we have fewer items, fetch the full thread.
-      let items: any[] = thread.items ?? [];
-      const unreadCount: number =
-        typeof thread.unread_count === 'number'
-          ? thread.unread_count
-          : thread.read_state;
-      if (unreadCount > items.length) {
-        const more = await fetchThreadItems(thread.thread_id, headers);
-        if (more.length > 0) {
-          items = more;
-        }
-      }
+      // The inbox API returns only 1-2 items per thread regardless of how many are
+      // unread. Always fetch the full thread so we can show every unread message.
+      const more = await fetchThreadItems(thread.thread_id, headers);
+      const items: any[] = more.length > 0 ? more : (thread.items ?? []);
 
       // items are newest-first; stop at the last item_id we already notified about
       const lastNotifiedId = notified[thread.thread_id];

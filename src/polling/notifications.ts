@@ -36,41 +36,61 @@ export async function requestNotificationPermission() {
   await notifee.requestPermission();
 }
 
+function buildMessagingStyle(thread: UnreadThread) {
+  const messages = thread.messages.map(m => ({
+    text: m.text || 'Sent a message',
+    timestamp: m.timestamp || Date.now(),
+    person: {name: m.sender || 'Unknown'},
+  }));
+  const groupTitle = thread.isGroup
+    ? String(thread.title || 'Group Chat')
+    : null;
+  if (groupTitle !== null) {
+    return {
+      type: AndroidStyle.MESSAGING,
+      person: {name: 'You'},
+      title: groupTitle,
+      group: true,
+      messages,
+    };
+  }
+  return {
+    type: AndroidStyle.MESSAGING,
+    person: {name: 'You'},
+    messages,
+  };
+}
+
 export async function showThreadNotifications(threads: UnreadThread[]) {
   if (threads.length === 0) return;
 
   for (const thread of threads) {
-    const isMulti = thread.messages.length > 1;
+    try {
+      const isMulti = thread.messages.length > 1;
+      const title = thread.title || 'Instagram DM';
+      const body = thread.messages[thread.messages.length - 1]?.text || 'New message';
 
-    await notifee.displayNotification({
-      id: `dm_${thread.id}`,
-      title: thread.title,
-      body: thread.messages[thread.messages.length - 1]?.text ?? 'New message',
-      android: {
-        channelId: CHANNEL_ID,
-        groupId: GROUP_ID,
-        groupAlertBehavior: AndroidGroupAlertBehavior.CHILDREN,
-        importance: AndroidImportance.HIGH,
-        smallIcon: 'ic_notification',
-        largeIcon: thread.profilePicUrl,
-        timestamp: thread.timestamp,
-        showTimestamp: true,
-        pressAction: {id: 'default'},
-        // MessagingStyle shows each message on its own line — great for group chats
-        style: isMulti
-          ? {
-              type: AndroidStyle.MESSAGING,
-              person: {name: 'You'},
-              ...(thread.isGroup ? {title: thread.title, group: true} : {}),
-              messages: thread.messages.map(m => ({
-                text: m.text,
-                timestamp: m.timestamp,
-                person: {name: m.sender},
-              })),
-            }
-          : undefined,
-      },
-    });
+      await notifee.displayNotification({
+        id: `dm_${thread.id}`,
+        title,
+        body,
+        android: {
+          channelId: CHANNEL_ID,
+          groupId: GROUP_ID,
+          groupAlertBehavior: AndroidGroupAlertBehavior.CHILDREN,
+          importance: AndroidImportance.HIGH,
+          smallIcon: 'ic_notification',
+          largeIcon: thread.profilePicUrl,
+          timestamp: thread.timestamp,
+          showTimestamp: true,
+          pressAction: {id: 'default'},
+          style: isMulti ? buildMessagingStyle(thread) : undefined,
+        },
+      });
+    } catch (err) {
+      // Skip this thread's notification rather than crashing the whole loop
+      console.warn('notifee: failed to display thread', thread.id, err);
+    }
   }
 
   if (threads.length > 1) {

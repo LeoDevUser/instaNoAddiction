@@ -20,6 +20,7 @@ export interface UnreadThread {
   profilePicUrl?: string;
   timestamp: number;        // ms epoch of latest message
   messages: NotifMessage[]; // oldest → newest
+  isGroup?: boolean;
 }
 
 export async function setupNotifications() {
@@ -59,7 +60,8 @@ export async function showThreadNotifications(threads: UnreadThread[]) {
         style: isMulti
           ? {
               type: AndroidStyle.MESSAGING,
-              person: {name: thread.title, icon: thread.profilePicUrl},
+              person: {name: 'You'},
+              ...(thread.isGroup ? {title: thread.title, group: true} : {}),
               messages: thread.messages.map(m => ({
                 text: m.text,
                 timestamp: m.timestamp,

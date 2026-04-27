@@ -57,24 +57,35 @@ function getPreview(item: Record<string, any>): string {
       const emoji = item.reaction?.emoji ?? '❤️';
       return `Reacted ${emoji} to your message`;
     }
+    case 'like':
+      return '❤️ Liked a message';
     case 'media':
     case 'raven_media':
       return '📷 Photo';
     case 'voice_media':
+    case 'audio':
       return '🎤 Voice message';
+    case 'animated_media':
+      return '😄 Sticker';
     case 'reel_share':
     case 'clip':
       return '📹 Reel';
     case 'story_share':
+    case 'story_reply':
       return '📖 Story';
     case 'media_share':
+    case 'xma_media_share':
       return '📷 Post';
-    case 'like':
-      return '❤️ Liked a message';
     case 'link':
-      return '🔗 Link';
+      return item.link?.text || '🔗 Link';
     case 'location':
       return '📍 Location';
+    case 'profile':
+      return '👤 Profile';
+    case 'placeholder':
+      return '⏳ Message expired';
+    case 'action_log':
+      return item.action_log?.description || 'Sent a message';
     default:
       return 'Sent a message';
   }
@@ -90,6 +101,23 @@ function getSenderName(item: Record<string, any>, thread: Record<string, any>): 
 
 // ── API fetch ──────────────────────────────────────────────────────────────
 
+async function fetchThreadItems(
+  threadId: string,
+  headers: Record<string, string>,
+): Promise<any[]> {
+  try {
+    const res = await fetch(
+      `${INSTAGRAM_URL}/api/v1/direct_v2/threads/${threadId}/?limit=20`,
+      {headers},
+    );
+    if (!res.ok) return [];
+    const json = await res.json();
+    return json?.thread?.items ?? [];
+  } catch {
+    return [];
+  }
+}
+
 async function fetchUnreadThreads(
   notified: Record<string, string>,
 ): Promise<UnreadThread[] | null> {
@@ -101,17 +129,16 @@ async function fetchUnreadThreads(
       .map(([k, c]) => `${k}=${c.value}`)
       .join('; ');
 
-    const res = await fetch(INBOX_API, {
-      headers: {
-        Cookie: cookieHeader,
-        'X-CSRFToken': cookies.csrftoken?.value ?? '',
-        'X-IG-App-ID': IG_APP_ID,
-        'User-Agent': UA,
-        Referer: `${INSTAGRAM_URL}/direct/inbox/`,
-        Accept: '*/*',
-      },
-    });
+    const headers = {
+      Cookie: cookieHeader,
+      'X-CSRFToken': cookies.csrftoken?.value ?? '',
+      'X-IG-App-ID': IG_APP_ID,
+      'User-Agent': UA,
+      Referer: `${INSTAGRAM_URL}/direct/inbox/`,
+      Accept: '*/*',
+    };
 
+    const res = await fetch(INBOX_API, {headers});
     if (!res.ok) return null;
     const json = await res.json();
     const threads: any[] = json?.inbox?.threads ?? [];
@@ -120,14 +147,31 @@ async function fetchUnreadThreads(
     for (const thread of threads) {
       if (!thread.read_state) continue;
 
-      const items: any[] = thread.items ?? [];
-      // items are newest-first; find the last item_id we already notified about
-      const lastNotifiedId = notified[thread.thread_id];
+      const isGroup = thread.thread_type === 'group';
+      // Group chats have a dedicated image; 1-on-1 uses the other person's profile pic
+      const profilePicUrl = isGroup
+        ? (thread.image?.uri ?? thread.image?.url ?? thread.users?.[0]?.profile_pic_url)
+        : thread.users?.[0]?.profile_pic_url;
 
-      // Collect items that are new (not sent by viewer, newer than last notified)
+      // Inbox API returns only the latest 1-2 items per thread.
+      // read_state is the unread count — if we have fewer items, fetch the full thread.
+      let items: any[] = thread.items ?? [];
+      const unreadCount: number =
+        typeof thread.unread_count === 'number'
+          ? thread.unread_count
+          : thread.read_state;
+      if (unreadCount > items.length) {
+        const more = await fetchThreadItems(thread.thread_id, headers);
+        if (more.length > 0) {
+          items = more;
+        }
+      }
+
+      // items are newest-first; stop at the last item_id we already notified about
+      const lastNotifiedId = notified[thread.thread_id];
       const newItems: any[] = [];
       for (const item of items) {
-        if (item.item_id === lastNotifiedId) break; // reached already-seen boundary
+        if (item.item_id === lastNotifiedId) break;
         if (!item.is_sent_by_viewer) {
           newItems.push(item);
         }
@@ -135,11 +179,9 @@ async function fetchUnreadThreads(
 
       if (newItems.length === 0) continue;
 
-      const latest = newItems[0]; // newest (items are newest-first)
-      const profilePicUrl =
-        thread.users?.[0]?.profile_pic_url ?? thread.image?.uri;
+      const latest = newItems[0]; // newest first
 
-      // Convert to NotifMessage[], oldest → newest
+      // oldest → newest for MessagingStyle display order
       const messages: NotifMessage[] = newItems
         .slice()
         .reverse()
@@ -160,6 +202,7 @@ async function fetchUnreadThreads(
         profilePicUrl,
         timestamp: toMs(Number(latest.timestamp)),
         messages,
+        isGroup,
       });
     }
 

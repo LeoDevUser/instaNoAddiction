@@ -1,97 +1,97 @@
-This is a new [**React Native**](https://reactnative.dev) project, bootstrapped using [`@react-native-community/cli`](https://github.com/react-native-community/cli).
+# Instagram DMs
 
-# Getting Started
+A React Native Android app that wraps Instagram and restricts it to Direct Messages only. No feed, no reels, no explore — just DMs.
 
-> **Note**: Make sure you have completed the [Set Up Your Environment](https://reactnative.dev/docs/set-up-your-environment) guide before proceeding.
+## What it does
 
-## Step 1: Start Metro
+- Opens Instagram locked to the DM inbox
+- Blocks navigation to the home feed, reels, explore, and TV
+- Hides post feed content (articles/feed sections) on any page
+- Removes nav tabs for Reels and Explore
+- Blocks access to the blocked users list
+- Background polling for unread DMs with rich Android notifications (MessagingStyle, group chat support, per-sender names, emoji reactions)
+- Adaptive polling: fast when messages are coming in, backs off when idle
+- Unread count badge from page title
 
-First, you will need to run **Metro**, the JavaScript build tool for React Native.
+## Tech stack
 
-To start the Metro dev server, run the following command from the root of your React Native project:
+- React Native 0.85.2, New Architecture, Android only
+- `react-native-webview` — WebView wrapper
+- `@notifee/react-native` — rich notifications
+- `react-native-background-fetch` — background polling
+- `@react-native-cookies/cookies` — session cookie access for API calls
+- `@react-native-async-storage/async-storage` — polling state persistence
 
-```sh
-# Using npm
-npm start
+## Architecture
 
-# OR using Yarn
-yarn start
-```
+### URL filtering (`src/urlFilter.ts`)
+Blocklist/allowlist checked by the WebView's `onShouldStartLoadWithRequest`. Blocks home feed, reels, explore, TV, settings, and blocked-users pages. Allows DMs, accounts, challenge/2FA, and story replies.
 
-## Step 2: Build and run your app
+### DOM injection (`src/injection/domWatcher.js.ts`)
+Injected via `injectedJavaScriptBeforeContentLoaded`. Runs before Instagram's JS.
+- Redirects to inbox on blocked URLs at page load
+- Intercepts `pushState`/`replaceState` to block SPA navigation to blocked routes
+- Blocks vertical swipe gestures in reel feeds (touch event interception in capture phase)
+- Trims adjacent reel nodes from the DOM so swipe-snap has nothing to snap to
+- Strips nav tabs and blocked-list UI elements via MutationObserver
+- Detects "Unblock" buttons and redirects immediately
+- Posts unread count to React Native via `ReactNativeWebView.postMessage`
 
-With Metro running, open a new terminal window/pane from the root of your React Native project, and use one of the following commands to build and run your Android or iOS app:
+### CSS injection (`src/injection/blockReels.css.ts`)
+Persistent stylesheet injected into the WebView. Hides reels/explore nav links, inline reel clips, and all `article`/`[role="feed"]` post content.
 
-### Android
+### Background polling (`src/polling/`)
+- `poller.ts` — fetches the Instagram inbox API using session cookies, detects unread threads, fires notifications, schedules next poll
+- `notifications.ts` — builds Android MessagingStyle notifications with group/DM support
+- `schedule.ts` — exponential backoff schedule (fast → slow as inbox goes quiet)
 
-```sh
-# Using npm
+Polling uses the Instagram private API (`/api/v1/direct_v2/inbox/` + per-thread endpoint for full message history). Session cookies from the WebView are reused so no separate login is needed.
+
+## Building
+
+### Debug (development)
+```bash
+npm install
 npm run android
-
-# OR using Yarn
-yarn android
 ```
 
-### iOS
-
-For iOS, remember to install CocoaPods dependencies (this only needs to be run on first clone or after updating native deps).
-
-The first time you create a new project, run the Ruby bundler to install CocoaPods itself:
-
-```sh
-bundle install
+### Release APK
+```bash
+cd android
+./gradlew assembleRelease
 ```
 
-Then, and every time you update your native dependencies, run:
+Output: `android/app/build/outputs/apk/release/app-release.apk`
 
-```sh
-bundle exec pod install
+### Install via USB
+```bash
+adb install -r android/app/build/outputs/apk/release/app-release.apk
 ```
 
-For more information, please visit [CocoaPods Getting Started guide](https://guides.cocoapods.org/using/getting-started.html).
-
-```sh
-# Using npm
-npm run ios
-
-# OR using Yarn
-yarn ios
+If upgrading from a debug build (different signing key), uninstall first:
+```bash
+adb uninstall com.dmsonly
+adb install android/app/build/outputs/apk/release/app-release.apk
 ```
 
-If everything is set up correctly, you should see your new app running in the Android Emulator, iOS Simulator, or your connected device.
+### Release signing
+The release keystore is stored at `/home/leo/instagram-dms-release.keystore`. Credentials are in `android/gradle.properties`. Keep the keystore backed up — losing it means you can't update the app from the same signing identity.
 
-This is one way to run your app — you can also build it directly from Android Studio or Xcode.
+## Key files
 
-## Step 3: Modify your app
-
-Now that you have successfully run the app, let's make changes!
-
-Open `App.tsx` in your text editor of choice and make some changes. When you save, your app will automatically update and reflect these changes — this is powered by [Fast Refresh](https://reactnative.dev/docs/fast-refresh).
-
-When you want to forcefully reload, for example to reset the state of your app, you can perform a full reload:
-
-- **Android**: Press the <kbd>R</kbd> key twice or select **"Reload"** from the **Dev Menu**, accessed via <kbd>Ctrl</kbd> + <kbd>M</kbd> (Windows/Linux) or <kbd>Cmd ⌘</kbd> + <kbd>M</kbd> (macOS).
-- **iOS**: Press <kbd>R</kbd> in iOS Simulator.
-
-## Congratulations! :tada:
-
-You've successfully run and modified your React Native App. :partying_face:
-
-### Now what?
-
-- If you want to add this new React Native code to an existing application, check out the [Integration guide](https://reactnative.dev/docs/integration-with-existing-apps).
-- If you're curious to learn more about React Native, check out the [docs](https://reactnative.dev/docs/getting-started).
-
-# Troubleshooting
-
-If you're having issues getting the above steps to work, see the [Troubleshooting](https://reactnative.dev/docs/troubleshooting) page.
-
-# Learn More
-
-To learn more about React Native, take a look at the following resources:
-
-- [React Native Website](https://reactnative.dev) - learn more about React Native.
-- [Getting Started](https://reactnative.dev/docs/environment-setup) - an **overview** of React Native and how setup your environment.
-- [Learn the Basics](https://reactnative.dev/docs/getting-started) - a **guided tour** of the React Native **basics**.
-- [Blog](https://reactnative.dev/blog) - read the latest official React Native **Blog** posts.
-- [`@facebook/react-native`](https://github.com/facebook/react-native) - the Open Source; GitHub **repository** for React Native.
+```
+src/
+  App.tsx                        — WebView setup, message handler, permission requests
+  urlFilter.ts                   — URL blocklist/allowlist
+  injection/
+    domWatcher.js.ts             — injected JS (navigation intercept, reel blocking, DOM cleanup)
+    blockReels.css.ts            — injected CSS (hide feed, nav tabs, reel clips)
+  polling/
+    poller.ts                    — inbox API fetcher, notification trigger, background task handler
+    notifications.ts             — notifee notification builder
+    schedule.ts                  — adaptive polling intervals
+android/
+  app/src/main/res/
+    mipmap-*/ic_launcher*.png    — launcher icons (all densities)
+    drawable/ic_launcher_*.xml   — adaptive icon layers
+```

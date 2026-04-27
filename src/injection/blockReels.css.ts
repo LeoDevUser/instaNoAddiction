@@ -20,4 +20,11 @@ export const BLOCK_REELS_CSS = `
   [data-media-type="2"] {
     display: none !important;
   }
+
+  /* ── Hide post feed ────────────────────────────────────────────────────── */
+  /* Each post card and the feed scroll container */
+  article,
+  [role="feed"] {
+    display: none !important;
+  }
 `;

@@ -1,18 +1,20 @@
 import BackgroundFetch from 'react-native-background-fetch';
 import CookieManager from '@react-native-cookies/cookies';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {showDmNotification} from './notifications';
+import {showThreadNotifications, UnreadThread} from './notifications';
 import {TASK_ID, DELAYS_MS, MAX_STEP} from './schedule';
 
 const INSTAGRAM_URL = 'https://www.instagram.com';
 const INBOX_API =
-  'https://www.instagram.com/api/v1/direct_v2/inbox/?limit=1';
+  'https://www.instagram.com/api/v1/direct_v2/inbox/?limit=20&visual_message_return_type=unseen';
 const IG_APP_ID = '936619743392459';
 const UA =
   'Mozilla/5.0 (Linux; Android 14; Pixel 8) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36';
 
 const KEY_STEP = 'poll_step';
-const KEY_UNSEEN = 'poll_last_unseen';
+const KEY_NOTIFIED = 'notified_items'; // JSON: { thread_id: last_notified_item_id }
+
+// ── Persistence helpers ────────────────────────────────────────────────────
 
 async function getStep(): Promise<number> {
   const v = await AsyncStorage.getItem(KEY_STEP);
@@ -23,16 +25,51 @@ async function saveStep(step: number) {
   await AsyncStorage.setItem(KEY_STEP, String(step));
 }
 
-async function getLastUnseen(): Promise<number> {
-  const v = await AsyncStorage.getItem(KEY_UNSEEN);
-  return v !== null ? parseInt(v, 10) : 0;
+async function getNotifiedItems(): Promise<Record<string, string>> {
+  const v = await AsyncStorage.getItem(KEY_NOTIFIED);
+  try {
+    return v ? JSON.parse(v) : {};
+  } catch {
+    return {};
+  }
 }
 
-async function saveLastUnseen(count: number) {
-  await AsyncStorage.setItem(KEY_UNSEEN, String(count));
+async function saveNotifiedItems(items: Record<string, string>) {
+  await AsyncStorage.setItem(KEY_NOTIFIED, JSON.stringify(items));
 }
 
-async function fetchUnseenCount(): Promise<number | null> {
+// ── Message preview ────────────────────────────────────────────────────────
+
+function getPreview(item: Record<string, any>): string {
+  switch (item.item_type) {
+    case 'text':
+      return item.text || 'Sent a message';
+    case 'media':
+    case 'raven_media':
+      return '📷 Photo';
+    case 'voice_media':
+      return '🎤 Voice message';
+    case 'reel_share':
+    case 'clip':
+      return '📹 Reel';
+    case 'story_share':
+      return '📖 Story';
+    case 'media_share':
+      return '📷 Post';
+    case 'like':
+      return '❤️ Liked a message';
+    case 'link':
+      return '🔗 Link';
+    case 'location':
+      return '📍 Location';
+    default:
+      return 'Sent a message';
+  }
+}
+
+// ── API fetch ──────────────────────────────────────────────────────────────
+
+async function fetchUnreadThreads(): Promise<UnreadThread[] | null> {
   try {
     const cookies = await CookieManager.get(INSTAGRAM_URL);
     if (!cookies.sessionid?.value) return null;
@@ -54,13 +91,65 @@ async function fetchUnseenCount(): Promise<number | null> {
 
     if (!res.ok) return null;
     const json = await res.json();
-    return typeof json?.inbox?.unseen_count === 'number'
-      ? json.inbox.unseen_count
-      : null;
+    const threads: any[] = json?.inbox?.threads ?? [];
+
+    const unread: UnreadThread[] = [];
+    for (const thread of threads) {
+      // read_state > 0 means there are unseen messages
+      if (!thread.read_state) continue;
+      const items: any[] = thread.items ?? [];
+      const latest = items[0];
+      if (!latest || latest.is_sent_by_viewer) continue;
+
+      unread.push({
+        id: thread.thread_id,
+        title:
+          thread.thread_title ||
+          thread.users?.[0]?.full_name ||
+          thread.users?.[0]?.username ||
+          'Instagram DM',
+        preview: getPreview(latest),
+        itemId: latest.item_id,
+      });
+    }
+
+    return unread;
   } catch {
     return null;
   }
 }
+
+// ── Core poll logic ────────────────────────────────────────────────────────
+
+// Returns the next backoff step
+async function runPoll(): Promise<number> {
+  const currentStep = await getStep();
+  const threads = await fetchUnreadThreads();
+
+  if (threads === null) {
+    // Not logged in or network error — keep same step
+    return currentStep;
+  }
+
+  const notified = await getNotifiedItems();
+
+  // Find threads with messages we haven't notified about yet
+  const fresh = threads.filter(t => notified[t.id] !== t.itemId);
+
+  if (fresh.length > 0) {
+    await showThreadNotifications(fresh);
+    const updated = {...notified};
+    fresh.forEach(t => {
+      updated[t.id] = t.itemId;
+    });
+    await saveNotifiedItems(updated);
+    return 0; // New messages — restart fast polling
+  }
+
+  return Math.min(currentStep + 1, MAX_STEP);
+}
+
+// ── Scheduling ─────────────────────────────────────────────────────────────
 
 async function scheduleNextPoll(step: number) {
   const delay = DELAYS_MS[Math.min(step, MAX_STEP)];
@@ -73,31 +162,29 @@ async function scheduleNextPoll(step: number) {
   });
 }
 
-// Called from DmsWebView when app backgrounds or new message detected in DOM
+// Called when app backgrounds or new message detected in DOM
 export async function resetPollStep() {
   await saveStep(0);
   await scheduleNextPoll(0);
 }
 
-// Core poll logic — returns the next step
-async function runPoll(): Promise<number> {
-  const currentStep = await getStep();
-  const unseen = await fetchUnseenCount();
+// ── Public API ─────────────────────────────────────────────────────────────
 
-  if (unseen === null) {
-    // API failed (not logged in, network error) — keep same step
-    return currentStep;
-  }
+// Called on app open — checks immediately and notifies about anything unread
+export async function checkAndNotify() {
+  const threads = await fetchUnreadThreads();
+  if (!threads || threads.length === 0) return;
 
-  const lastUnseen = await getLastUnseen();
-  await saveLastUnseen(unseen);
+  const notified = await getNotifiedItems();
+  const fresh = threads.filter(t => notified[t.id] !== t.itemId);
+  if (fresh.length === 0) return;
 
-  if (unseen > lastUnseen) {
-    await showDmNotification(unseen);
-    return 0; // new message — restart fast polling
-  }
-
-  return Math.min(currentStep + 1, MAX_STEP);
+  await showThreadNotifications(fresh);
+  const updated = {...notified};
+  fresh.forEach(t => {
+    updated[t.id] = t.itemId;
+  });
+  await saveNotifiedItems(updated);
 }
 
 // Foreground + background handler
@@ -120,7 +207,7 @@ export async function headlessTask(event: {taskId: string}) {
 export async function initPoller() {
   await BackgroundFetch.configure(
     {
-      minimumFetchInterval: 15, // fallback periodic (Android minimum)
+      minimumFetchInterval: 15,
       stopOnTerminate: false,
       startOnBoot: true,
       enableHeadless: true,
@@ -128,11 +215,9 @@ export async function initPoller() {
     },
     handlePollTask,
     (taskId: string) => {
-      // Timeout — finish immediately
       BackgroundFetch.finish(taskId);
     },
   );
 
-  // Kick off the first one-shot poll cycle
   await scheduleNextPoll(await getStep());
 }

@@ -1,7 +1,7 @@
 import React, {useEffect} from 'react';
 import {StatusBar} from 'react-native';
 import DmsWebView from './src/DmsWebView';
-import {initPoller} from './src/polling/poller';
+import {initPoller, checkAndNotify} from './src/polling/poller';
 import {setupNotifications, requestNotificationPermission} from './src/polling/notifications';
 
 export default function App() {
@@ -10,6 +10,8 @@ export default function App() {
       await setupNotifications();
       await requestNotificationPermission();
       await initPoller();
+      // Notify about any unread messages immediately on app open
+      await checkAndNotify();
     }
     bootstrap();
   }, []);

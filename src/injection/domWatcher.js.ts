@@ -14,7 +14,8 @@ export const DOM_WATCHER_JS = `
       || /^\\/reels\\//.test(p)
       || /^\\/explore\\//.test(p)
       || /^\\/tv\\//.test(p)
-      || /^\\/accounts\\/blocked_users/.test(p);
+      || /^\\/accounts\\/blocked_users/.test(p)
+      || /^\\/accounts\\/settings/.test(p);
   }
   function goInbox() { location.replace(INBOX_FULL); }
 
@@ -117,7 +118,7 @@ export const DOM_WATCHER_JS = `
   }
 
   new MutationObserver(trimReelFeed)
-    .observe(document.documentElement, { childList: true, subtree: true });
+    .observe(document.documentElement || document, { childList: true, subtree: true });
   trimReelFeed();
 
   // ── Navigation interception ────────────────────────────────────────────────
@@ -178,6 +179,7 @@ export const DOM_WATCHER_JS = `
     }
     // Hide the "Blocked" settings entry using a text-node walk
     var root = document.body || document.documentElement;
+    if (!root) return;
     var walker = document.createTreeWalker(root, NodeFilter.SHOW_TEXT);
     var node;
     while ((node = walker.nextNode())) {
@@ -200,7 +202,7 @@ export const DOM_WATCHER_JS = `
   new MutationObserver(function() {
     strip();
     guardBlockedPage();
-  }).observe(document.documentElement, { childList: true, subtree: true });
+  }).observe(document.documentElement || document, { childList: true, subtree: true });
 
   // ── Unread count from title ────────────────────────────────────────────────
   function watchTitle() {

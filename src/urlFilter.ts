@@ -6,8 +6,9 @@ const BLOCKED: RegExp[] = [
   /^https:\/\/www\.instagram\.com\/$/,
   /^https:\/\/www\.instagram\.com\/?$/,
   /^https:\/\/www\.instagram\.com\/#/,
-  // Blocked users list — must not be reachable
+  // Settings and blocked users — not needed in a DM-only app
   /instagram\.com\/accounts\/blocked_users/,
+  /instagram\.com\/accounts\/settings/,
 ];
 
 const ALLOWED: RegExp[] = [

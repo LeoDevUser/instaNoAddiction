@@ -1,7 +1,7 @@
 import BackgroundFetch from 'react-native-background-fetch';
 import CookieManager from '@react-native-cookies/cookies';
 import AsyncStorage from '@react-native-async-storage/async-storage';
-import {showThreadNotifications, UnreadThread} from './notifications';
+import {showThreadNotifications, UnreadThread, NotifMessage} from './notifications';
 import {TASK_ID, DELAYS_MS, MAX_STEP} from './schedule';
 
 const INSTAGRAM_URL = 'https://www.instagram.com';
@@ -38,12 +38,25 @@ async function saveNotifiedItems(items: Record<string, string>) {
   await AsyncStorage.setItem(KEY_NOTIFIED, JSON.stringify(items));
 }
 
+// ── Timestamp helpers ──────────────────────────────────────────────────────
+
+// Instagram timestamps are in microseconds (16-digit). Convert to ms epoch.
+function toMs(ts: number): number {
+  if (ts > 1e15) return Math.floor(ts / 1000);
+  if (ts > 1e12) return ts;
+  return ts * 1000;
+}
+
 // ── Message preview ────────────────────────────────────────────────────────
 
 function getPreview(item: Record<string, any>): string {
   switch (item.item_type) {
     case 'text':
       return item.text || 'Sent a message';
+    case 'reaction': {
+      const emoji = item.reaction?.emoji ?? '❤️';
+      return `Reacted ${emoji} to your message`;
+    }
     case 'media':
     case 'raven_media':
       return '📷 Photo';
@@ -67,9 +80,19 @@ function getPreview(item: Record<string, any>): string {
   }
 }
 
+// ── Build sender name for an item ──────────────────────────────────────────
+
+function getSenderName(item: Record<string, any>, thread: Record<string, any>): string {
+  const userId = item.user_id;
+  const user = (thread.users ?? []).find((u: any) => String(u.pk) === String(userId));
+  return user?.full_name || user?.username || 'Unknown';
+}
+
 // ── API fetch ──────────────────────────────────────────────────────────────
 
-async function fetchUnreadThreads(): Promise<UnreadThread[] | null> {
+async function fetchUnreadThreads(
+  notified: Record<string, string>,
+): Promise<UnreadThread[] | null> {
   try {
     const cookies = await CookieManager.get(INSTAGRAM_URL);
     if (!cookies.sessionid?.value) return null;
@@ -95,11 +118,36 @@ async function fetchUnreadThreads(): Promise<UnreadThread[] | null> {
 
     const unread: UnreadThread[] = [];
     for (const thread of threads) {
-      // read_state > 0 means there are unseen messages
       if (!thread.read_state) continue;
+
       const items: any[] = thread.items ?? [];
-      const latest = items[0];
-      if (!latest || latest.is_sent_by_viewer) continue;
+      // items are newest-first; find the last item_id we already notified about
+      const lastNotifiedId = notified[thread.thread_id];
+
+      // Collect items that are new (not sent by viewer, newer than last notified)
+      const newItems: any[] = [];
+      for (const item of items) {
+        if (item.item_id === lastNotifiedId) break; // reached already-seen boundary
+        if (!item.is_sent_by_viewer) {
+          newItems.push(item);
+        }
+      }
+
+      if (newItems.length === 0) continue;
+
+      const latest = newItems[0]; // newest (items are newest-first)
+      const profilePicUrl =
+        thread.users?.[0]?.profile_pic_url ?? thread.image?.uri;
+
+      // Convert to NotifMessage[], oldest → newest
+      const messages: NotifMessage[] = newItems
+        .slice()
+        .reverse()
+        .map((item: any) => ({
+          text: getPreview(item),
+          sender: getSenderName(item, thread),
+          timestamp: toMs(Number(item.timestamp)),
+        }));
 
       unread.push({
         id: thread.thread_id,
@@ -108,8 +156,10 @@ async function fetchUnreadThreads(): Promise<UnreadThread[] | null> {
           thread.users?.[0]?.full_name ||
           thread.users?.[0]?.username ||
           'Instagram DM',
-        preview: getPreview(latest),
         itemId: latest.item_id,
+        profilePicUrl,
+        timestamp: toMs(Number(latest.timestamp)),
+        messages,
       });
     }
 
@@ -121,25 +171,19 @@ async function fetchUnreadThreads(): Promise<UnreadThread[] | null> {
 
 // ── Core poll logic ────────────────────────────────────────────────────────
 
-// Returns the next backoff step
 async function runPoll(): Promise<number> {
   const currentStep = await getStep();
-  const threads = await fetchUnreadThreads();
+  const notified = await getNotifiedItems();
+  const threads = await fetchUnreadThreads(notified);
 
   if (threads === null) {
-    // Not logged in or network error — keep same step
     return currentStep;
   }
 
-  const notified = await getNotifiedItems();
-
-  // Find threads with messages we haven't notified about yet
-  const fresh = threads.filter(t => notified[t.id] !== t.itemId);
-
-  if (fresh.length > 0) {
-    await showThreadNotifications(fresh);
+  if (threads.length > 0) {
+    await showThreadNotifications(threads);
     const updated = {...notified};
-    fresh.forEach(t => {
+    threads.forEach(t => {
       updated[t.id] = t.itemId;
     });
     await saveNotifiedItems(updated);
@@ -162,46 +206,49 @@ async function scheduleNextPoll(step: number) {
   });
 }
 
-// Called when app backgrounds or new message detected in DOM
 export async function resetPollStep() {
   await saveStep(0);
+  // Clear seen-map so background polls will re-notify about still-unread messages
+  await AsyncStorage.removeItem(KEY_NOTIFIED);
   await scheduleNextPoll(0);
 }
 
 // ── Public API ─────────────────────────────────────────────────────────────
 
-// Called on app open — checks immediately and notifies about anything unread
 export async function checkAndNotify() {
-  const threads = await fetchUnreadThreads();
+  const notified = await getNotifiedItems();
+  const threads = await fetchUnreadThreads(notified);
   if (!threads || threads.length === 0) return;
 
-  const notified = await getNotifiedItems();
-  const fresh = threads.filter(t => notified[t.id] !== t.itemId);
-  if (fresh.length === 0) return;
-
-  await showThreadNotifications(fresh);
+  await showThreadNotifications(threads);
   const updated = {...notified};
-  fresh.forEach(t => {
+  threads.forEach(t => {
     updated[t.id] = t.itemId;
   });
   await saveNotifiedItems(updated);
 }
 
-// Foreground + background handler
 export async function handlePollTask(taskId: string) {
   if (taskId !== TASK_ID) {
     BackgroundFetch.finish(taskId);
     return;
   }
-  const nextStep = await runPoll();
-  await saveStep(nextStep);
-  await scheduleNextPoll(nextStep);
-  BackgroundFetch.finish(taskId);
+  try {
+    const nextStep = await runPoll();
+    await saveStep(nextStep);
+    await scheduleNextPoll(nextStep);
+  } finally {
+    // Must always be called or Android stops rescheduling the task
+    BackgroundFetch.finish(taskId);
+  }
 }
 
-// Headless handler — runs when app is fully killed
 export async function headlessTask(event: {taskId: string}) {
-  await handlePollTask(event.taskId);
+  try {
+    await handlePollTask(event.taskId);
+  } catch {
+    BackgroundFetch.finish(event.taskId);
+  }
 }
 
 export async function initPoller() {

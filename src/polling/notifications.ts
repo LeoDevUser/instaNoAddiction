@@ -1,16 +1,25 @@
 import notifee, {
   AndroidImportance,
   AndroidGroupAlertBehavior,
+  AndroidStyle,
 } from '@notifee/react-native';
 
 const CHANNEL_ID = 'dms';
 const GROUP_ID = 'ig_dms';
 
+export interface NotifMessage {
+  text: string;
+  sender: string;
+  timestamp: number; // ms epoch
+}
+
 export interface UnreadThread {
-  id: string;       // thread_id
-  title: string;    // sender name / group name
-  preview: string;  // message preview text
-  itemId: string;   // latest item id (used for dedup)
+  id: string;
+  title: string;
+  itemId: string;
+  profilePicUrl?: string;
+  timestamp: number;        // ms epoch of latest message
+  messages: NotifMessage[]; // oldest → newest
 }
 
 export async function setupNotifications() {
@@ -30,23 +39,38 @@ export async function showThreadNotifications(threads: UnreadThread[]) {
   if (threads.length === 0) return;
 
   for (const thread of threads) {
+    const isMulti = thread.messages.length > 1;
+
     await notifee.displayNotification({
       id: `dm_${thread.id}`,
       title: thread.title,
-      body: thread.preview,
+      body: thread.messages[thread.messages.length - 1]?.text ?? 'New message',
       android: {
         channelId: CHANNEL_ID,
         groupId: GROUP_ID,
         groupAlertBehavior: AndroidGroupAlertBehavior.CHILDREN,
         importance: AndroidImportance.HIGH,
         smallIcon: 'ic_notification',
-        pressAction: {id: 'default'},
+        largeIcon: thread.profilePicUrl,
+        timestamp: thread.timestamp,
         showTimestamp: true,
+        pressAction: {id: 'default'},
+        // MessagingStyle shows each message on its own line — great for group chats
+        style: isMulti
+          ? {
+              type: AndroidStyle.MESSAGING,
+              person: {name: thread.title, icon: thread.profilePicUrl},
+              messages: thread.messages.map(m => ({
+                text: m.text,
+                timestamp: m.timestamp,
+                person: {name: m.sender},
+              })),
+            }
+          : undefined,
       },
     });
   }
 
-  // Android requires a summary notification to collapse the group
   if (threads.length > 1) {
     await notifee.displayNotification({
       id: 'dm_summary',
